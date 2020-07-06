@@ -1,0 +1,2456 @@
+openapi: 3.0.2
+info:
+  title: Yagna API
+  description: Unified API
+  version: v1
+
+servers:
+  - url: /v1
+
+security:
+  - app_key: []
+
+tags:
+  - name: requestor
+    description: Requestor part
+  - name: provider
+    description: Provider part
+  - name: requestor_control
+    description: Requestor Part (Control)
+  - name: requestor_state
+    description: Requestor Part (State)
+
+paths:
+  /offers:
+    get:
+      tags:
+        - provider
+      summary: Fetches all active Offers which have been published by the Provider.
+      description: >
+
+      operationId: getOffers
+      responses:
+        '200':
+          description: Offer list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Offer'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  
+  /offers/{subscriptionId}:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+    delete:
+      tags:
+        - provider
+      summary: Stop subscription for previously published Offer.
+      description: >
+        Stop receiving Proposals.
+
+
+        **Note**: this will terminate all pending `collectDemands` calls on this subscription.
+        This implies, that client code should not `unsubscribeOffer` before it has received
+        all expected/useful inputs from `collectDemands`.
+      operationId: unsubscribeOffer
+      responses:
+        '204':
+          description: Offer revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Already unsubscribed.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+
+  /offers/{subscriptionId}/events:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+      - $ref: 'common.yaml#/parameters/timeout'
+      - $ref: 'common.yaml#/parameters/maxEvents'
+    get:
+      tags:
+        - provider
+      summary: Reads Market responses to published Offer.
+      description: >
+        This is a blocking operation. It will not return until there is at least one new event.
+
+
+        **Note**: When `collectDemands` is waiting, simultaneous call to `unsubscribeOffer` on the
+        same `subscriptionId` should result in "Subscription does not exist" error returned from
+        `collectDemands`.
+
+
+        **Note**: Specification requires this endpoint to support list of specific Proposal Ids
+        to listen for messages related only to specific Proposals. This is not covered yet.
+      operationId: collectDemands
+      responses:
+        '200':
+          description: Proposal or Agreement event list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/AgreementEvent'
+                    - $ref: '#/components/schemas/ProposalEvent'
+                    - $ref: '#/components/schemas/PropertyQueryEvent'
+              # links: TODO
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+  /offers/{subscriptionId}/propertyQuery/{queryId}:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+      - $ref: '#/components/parameters/queryId'
+    post:
+      tags:
+        - provider
+      summary: Handles dynamic property query.
+      description: >
+        The Market Matching Mechanism, when resolving the match relation for the
+        specific Demand-Offer pair, is to detect the “dynamic” properties required
+        (via constraints) by the other side. At this point, it is able to query the
+        issuing node for those properties and submit the other side’s requested
+        properties as the context of the query.
+
+
+        **Note**: The property query responses may be submitted in “chunks”, ie. the
+        responder may choose to resolve ‘quick’/lightweight’ properties faster and
+        provide response sooner, while still working on more time-consuming properties
+        in the background. Therefore the response contains both the resolved properties,
+        as well as list of properties which responder knows still require resolution.
+
+
+        **Note**: This method must be implemented for Market API Capability Level 2.
+      operationId: postQueryReplyOffers
+      requestBody:
+        $ref: '#/components/requestBodies/PropertyQueryReply'
+      responses:
+        '204':
+          description: OK, query reply posted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+  /offers/{subscriptionId}/proposals/{proposalId}:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+      - $ref: '#/components/parameters/proposalId'
+    get:
+      tags:
+        - provider
+      summary: Fetches Proposal (Demand) with given id.
+      operationId: getProposalDemand
+      responses:
+        '200':
+          $ref: '#/components/responses/Proposal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Proposal rejected.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    delete:
+      tags:
+        - provider
+      summary: Rejects Proposal (Demand).
+      description: >
+        Effectively ends a Negotiation chain - it explicitly indicates that the sender
+        will not create another counter-Proposal.
+      operationId: rejectProposalDemand
+      responses:
+        '204':
+          description: Proposal rejected.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Proposal already rejected.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    post:
+      tags:
+        - provider
+      summary: Responds with a bespoke Offer to received Demand.
+      description: >
+        Creates and sends a modified version of original Offer (a
+        counter-proposal) adjusted to previously received Proposal (ie. Demand).
+        Changes Proposal state to `Draft`. Returns created Proposal id.
+      operationId: counterProposalOffer
+      requestBody:
+        $ref: '#/components/requestBodies/Proposal'
+      responses:
+        '201':
+          $ref: '#/components/responses/ProposalId'
+          # links: TODO
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Proposal rejected.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+        
+  /demands:
+    get:
+      tags:
+        - requestor
+      summary: Fetches all active Demands which have been published by the Requestor.
+      description: >
+
+      operationId: getDemands
+      responses:
+        '200':
+          description: Demand list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/Demand'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+    post:
+      tags:
+        - requestor
+      summary: Publishes Requestor capabilities via Demand.
+      description: >
+        Demand object can be considered an "open" or public Demand, as it is not directed
+        at a specific Provider, but rather is sent to the market so that the matching
+        mechanism implementation can associate relevant Offers.
+
+
+        **Note**: it is an "atomic" operation, ie. as soon as Subscription is placed,
+        the Demand is published on the market.
+      operationId: subscribeDemand
+      requestBody:
+        $ref: '#/components/requestBodies/Demand'
+      responses:
+        '201':
+          $ref: '#/components/responses/SubscriptionId'
+          # links: TODO
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+
+  /demands/{subscriptionId}:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+    delete:
+      tags:
+        - requestor
+      summary: Stop subscription for previously published Demand.
+      description: >
+        Stop receiving Proposals.
+
+
+        **Note**: this will terminate all pending `collectOffers` calls on this subscription.
+        This implies, that client code should not `unsubscribeDemand` before it has received
+        all expected/useful inputs from `collectOffers`.
+      operationId: unsubscribeDemand
+      responses:
+        '204':
+          description: Demand revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Already unsubscribed.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+
+  /demands/{subscriptionId}/events:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+      - $ref: 'common.yaml#/parameters/timeout'
+      - $ref: 'common.yaml#/parameters/maxEvents'
+    get:
+      tags:
+        - requestor
+      summary: Reads Market responses to published Demand.
+      description: >
+        This is a blocking operation. It will not return until there is at least one new event.
+
+
+        **Note**: When `collectOffers` is waiting, simultaneous call to `unsubscribeDemand` on the
+        same `subscriptionId` should result in "Subscription does not exist" error returned from
+        `collectOffers`.
+
+
+        **Note**: Specification requires this endpoint to support list of specific Proposal Ids
+        to listen for messages related only to specific Proposals. This is not covered yet.
+      operationId: collectOffers
+      responses:
+        '200':
+          description: Proposal event list.
+          content:
+            application/json4:
+              schema:
+                type: array
+                items:
+                  oneOf:
+                    - $ref: '#/components/schemas/ProposalEvent'
+                    - $ref: '#/components/schemas/PropertyQueryEvent'
+
+          # links: TODO
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+  /demands/{subscriptionId}/propertyQuery/{queryId}:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+      - $ref: '#/components/parameters/queryId'
+    post:
+      tags:
+        - requestor
+      summary: Handles dynamic property query.
+      description: >
+        The Market Matching Mechanism, when resolving the match relation for the
+        specific Demand-Offer pair, is to detect the “dynamic” properties required
+        (via constraints) by the other side. At this point, it is able to query the
+        issuing node for those properties and submit the other side’s requested
+        properties as the context of the query.
+
+
+        **Note**: The property query responses may be submitted in “chunks”, ie. the
+        responder may choose to resolve ‘quick’/lightweight’ properties faster and
+        provide response sooner, while still working on more time-consuming properties
+        in the background. Therefore the response contains both the resolved properties,
+        as well as list of properties which responder knows still require resolution.
+
+
+        **Note**: This method must be implemented for Market API Capability Level 2.
+      operationId: postQueryReplyDemands
+      requestBody:
+        $ref: '#/components/requestBodies/PropertyQueryReply'
+      responses:
+        '204':
+          description: OK, query reply posted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+  /demands/{subscriptionId}/proposals/{proposalId}:
+    parameters:
+      - $ref: '#/components/parameters/subscriptionId'
+      - $ref: '#/components/parameters/proposalId'
+    get:
+      tags:
+        - requestor
+      summary: Fetches Proposal (Offer) with given id.
+      operationId: getProposalOffer
+      responses:
+        '200':
+          $ref: '#/components/responses/Proposal'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Proposal rejected.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    delete:
+      tags:
+        - requestor
+      summary: Rejects Proposal (Offer).
+      description: >
+        Effectively ends a Negotiation chain - it explicitly indicates that the sender
+        will not create another counter-Proposal.
+      operationId: rejectProposalOffer
+      responses:
+        '204':
+          description: Proposal rejected.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Proposal already rejected.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    post:
+      tags:
+        - requestor
+      summary: Responds with a bespoke Demand to received Offer.
+      description: >
+        Creates and sends a modified version of original Demand (a
+        counter-proposal) adjusted to previously received Proposal (ie. Offer).
+        Changes Proposal state to `Draft`. Returns created Proposal id.
+      operationId: counterProposalDemand
+      requestBody:
+        $ref: '#/components/requestBodies/Proposal'
+      responses:
+        '201':
+          $ref: '#/components/responses/ProposalId'
+          # links: TODO
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Proposal rejected.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+
+  /agreements:
+    post:
+      tags:
+        - requestor
+      summary: Creates Agreement from selected Proposal.
+      description: >
+        Initiates the Agreement handshake phase.
+
+
+        Formulates an Agreement artifact from the Proposal indicated by the
+        received Proposal Id.
+
+
+        The Approval Expiry Date is added to Agreement artifact and implies
+        the effective timeout on the whole Agreement Confirmation sequence.
+
+
+        A successful call to `createAgreement` shall immediately be followed
+        by a `confirmAgreement` and `waitForApproval` call in order to listen
+        for responses from the Provider.
+
+
+        **Note**: Moves given Proposal to `Approved` state.
+      operationId: createAgreement
+      requestBody:
+        $ref: '#/components/requestBodies/AgreementProposal'
+      responses:
+        '201':
+          description: Agreement created.
+          content:
+            application/json:
+              schema:
+                type: string
+                description: Agreement Id
+          links:
+            GetAgreementById:
+              description: The response value can be used to fetch Agreement in `GET /agreement/{agreementId}`
+              operationId: getAgreement
+              #operationRef: '#/paths/~1agreements~1{agreementId}/get'
+              parameters:
+                agreementId: '$response.body'
+            # TODO: more links
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+
+  /agreements/{agreementId}:
+    parameters:
+      - $ref: '#/components/parameters/agreementId'
+    get:
+      tags:
+        - requestor
+        - provider
+      summary: Fetches agreement with given agreement id.
+      operationId: getAgreement
+      responses:
+        '200':
+          description: Agreement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agreement'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+    delete:
+      tags:
+        - requestor
+      summary: Cancels agreement.
+      description: >
+        Causes the awaiting `waitForApproval` call to return with `Cancelled` response.
+      operationId: cancelAgreement
+      responses:
+        '204':
+          description: Agreement cancelled.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Agreement already approved.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+
+  /agreements/{agreementId}/confirm:
+    parameters:
+      - $ref: '#/components/parameters/agreementId'
+    post:
+      tags:
+        - requestor
+      summary: Sends Agreement draft to the Provider.
+      description: >
+        Signs Agreement self-created via `createAgreement` and sends it to the Provider.
+      operationId: confirmAgreement
+      responses:
+        '204':
+          description: Agreement confirmed.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          description: Agreement cancelled.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+
+  /agreements/{agreementId}/wait:
+    parameters:
+      - $ref: '#/components/parameters/agreementId'
+      - $ref: 'common.yaml#/parameters/timeout'
+    post:
+      tags:
+        - requestor
+      summary: Waits for Agreement approval by the Provider.
+      description: >
+        This is a blocking operation. The call may be aborted by Requestor caller
+        code. After the call is aborted, another `waitForApproval` call can be
+        raised on the same Agreement Id.
+
+
+        It returns one of the following options:
+
+        * `Ok` - Indicates that the Agreement has been approved by the Provider.
+          - The Provider is now ready to accept a request to start an Activity
+            as described in the negotiated agreement.
+          - The Requestor’s corresponding `waitForApproval` call returns Ok after
+            this on the Provider side.
+
+        * `Rejected` - Indicates that the Provider has called `rejectAgreement`,
+          which effectively stops the Agreement handshake. The Requestor may attempt
+          to return to the Negotiation phase by sending a new Proposal.
+
+        * `Cancelled` - Indicates that the Requestor himself has called
+          `cancelAgreement`, which effectively stops the Agreement handshake.
+
+      operationId: waitForApproval
+      responses:
+        '200':
+          description: Agreement approval result.
+          content:
+            application/json:
+              schema:
+                type: string
+                enum: [Approved, Rejected, Cancelled, TimedOut]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+
+  /agreements/{agreementId}/approve:
+    parameters:
+      - $ref: '#/components/parameters/agreementId'
+      - $ref: 'common.yaml#/parameters/timeout'
+    post:
+      tags:
+        - provider
+      summary: Approves Agreement proposed by the Reqestor.
+      description: >
+        This is a blocking operation. The call may be aborted by Provider caller
+        code. After the call is aborted or timed out, another `approveAgreement`
+        call can be raised on the same `agreementId`.
+
+        It returns one of the following options:
+
+        * `Ok` - Indicates that the approved Agreement has been successfully
+        delivered to the Requestor and acknowledged.
+          - The Requestor side has been notified about the Provider’s commitment
+            to the Agreement.
+          - The Provider is now ready to accept a request to start an Activity
+            as described in the negotiated agreement.
+          - The Requestor’s corresponding ConfirmAgreement call returns Ok after
+            the one on the Provider side.
+
+        * `Cancelled` - Indicates that before delivering the approved Agreement,
+        the Requestor has called `cancelAgreement`, thus invalidating the
+        Agreement. The Provider may attempt to return to the Negotiation phase
+        by sending a new Proposal.
+
+
+        **Note**: It is expected from the Provider node implementation to “ring-fence”
+        the resources required to fulfill the Agreement before the ApproveAgreement
+        is sent. However, the resources should not be fully committed until `Ok`
+        response is received from the `approveAgreement` call.
+
+
+        **Note**: Mutually exclusive with `rejectAgreement`.
+      operationId: approveAgreement
+      responses:
+        '204':
+          description: Agreement approved.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Agreement already rejected.
+        '410':
+          description: Agreement cancelled by the Requstor.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+
+  /agreements/{agreementId}/reject:
+    parameters:
+      - $ref: '#/components/parameters/agreementId'
+    post:
+      tags:
+        - provider
+      summary: Rejects Agreement proposed by the Requestor.
+      description: >
+        The Requestor side is notified about the Provider’s decision to reject
+        a negotiated agreement. This effectively stops the Agreement handshake.
+
+
+        **Note**: Mutually exclusive with `approveAgreement`.
+      operationId: rejectAgreement
+      responses:
+        '204':
+          description: Agreement rejected.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Agreement already approved.
+        '410':
+          description: Agreement cancelled by the Requstor.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+
+
+  /agreements/{agreementId}/terminate:
+    parameters:
+      - $ref: '#/components/parameters/agreementId'
+    post:
+      tags:
+        - provider
+        - requestor
+      summary: Terminates approved Agreement.
+      operationId: terminateAgreement
+      responses:
+        '204':
+          description: Agreement terminated.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Agreement not in Approved state.
+        '410':
+          description: Agreement cancelled by the Requstor.
+        default:
+          $ref: '#/components/responses/UnexpectedError'
+  
+  /provider/debitNotes:
+    post:
+      tags:
+        - provider
+      summary: Issue a Debit Note.
+      operationId: issueDebitNote
+      requestBody:
+        $ref: '#/components/requestBodies/DebitNote'
+      responses:
+        201:
+          $ref: '#/components/responses/DebitNote'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+    get:
+      tags:
+        - provider
+      summary: Get Debit Notes issued by this Provider.
+      operationId: getIssuedDebitNotes
+      responses:
+        200:
+          $ref: '#/components/responses/DebitNoteList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /provider/debitNotes/{debitNodeId}:
+    get:
+      tags:
+        - provider
+      summary: Get Debit Note.
+      operationId: getIssuedDebitNote
+      parameters:
+        - $ref: '#/components/parameters/debitNodeId'
+      responses:
+        200:
+          $ref: '#/components/responses/DebitNote'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /provider/debitNotes/{debitNodeId}/payments:
+    get:
+      tags:
+        - provider
+      summary: Get Payments for Debit Note.
+      operationId: getPaymentsForIssuedDebitNote
+      parameters:
+        - $ref: '#/components/parameters/debitNodeId'
+      responses:
+        200:
+          $ref: '#/components/responses/PaymentList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /provider/debitNotes/{debitNodeId}/send:
+    post:
+      tags:
+        - provider
+      summary: Send Debit Note to Requestor.
+      operationId: sendDebitNote
+      description: >
+        This is a blocking operation. It will not return until the Requestor
+        has acknowledged receiving the Debit Note or timeout has passed.
+      parameters:
+        - $ref: '#/components/parameters/debitNodeId'
+        - $ref: '#/components/parameters/ackTimeout'
+      responses:
+        200:
+          $ref: '#/components/responses/OK'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+        504:
+          $ref: '#/components/responses/AckTimeout'
+
+  /provider/debitNotes/{debitNodeId}/cancel:
+    post:
+      tags:
+        - provider
+      summary: Cancel Debit Note.
+      operationId: cancelDebitNote
+      description: >
+        This is a blocking operation. It will not return until the Requestor
+        has acknowledged cancelling the Debit Note or timeout has passed.
+        The Requestor may refuse to cancel the Debit Note if they have already
+        paid it.
+      parameters:
+        - $ref: '#/components/parameters/debitNodeId'
+        - $ref: '#/components/parameters/ackTimeout'
+      responses:
+        200:
+          $ref: '#/components/responses/OK'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        409:
+          $ref: '#/components/responses/DebitNoteCancelRefused'
+        500:
+          $ref: '#/components/responses/ServerError'
+        504:
+          $ref: '#/components/responses/AckTimeout'
+
+  /provider/debitNoteEvents:
+    get:
+      tags:
+        - provider
+      summary: Get Debit Note events.
+      operationId: getProviderDebitNoteEvents
+      description: >
+        Listen for Debit Note-related events using long-polling. If there are
+        any events the method will return them immediately. If there are none
+        the method will wait until one appears or timeout passes.
+        `laterThan` parameter can be used in order to get just the 'new' events.
+        Setting the parameter value to the timestamp of the last processed event
+        ensures that no events will go unnoticed.
+
+      parameters:
+        - $ref: '#/components/parameters/eventTimeout'
+        - $ref: '#/components/parameters/laterThan'
+      responses:
+        200:
+          $ref: '#/components/responses/InvoiceEventList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /provider/invoices:
+    post:
+      tags:
+        - provider
+      summary: Issue an Invoice.
+      operationId: issueInvoice
+      requestBody:
+        $ref: '#/components/requestBodies/Invoice'
+      responses:
+        201:
+          $ref: '#/components/responses/Invoice'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+    get:
+      tags:
+        - provider
+      summary: Get Invoices issued by this Provider.
+      operationId: getIssuedInvoices
+      responses:
+        200:
+          $ref: '#/components/responses/InvoiceList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /provider/invoices/{invoiceId}:
+    get:
+      tags:
+        - provider
+      summary: Get Invoice.
+      operationId: getIssuedInvoice
+      parameters:
+        - $ref: '#/components/parameters/invoiceId'
+      responses:
+        200:
+          $ref: '#/components/responses/Invoice'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /provider/invoices/{invoiceId}/payments:
+    get:
+      tags:
+        - provider
+      summary: Get Payments for issued Invoice.
+      operationId: getPaymentsForIssuedInvoice
+      parameters:
+        - $ref: '#/components/parameters/invoiceId'
+      responses:
+        200:
+          $ref: '#/components/responses/PaymentList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /provider/invoices/{invoiceId}/send:
+    post:
+      tags:
+        - provider
+      summary: Send Invoice to Requestor.
+      operationId: sendInvoice
+      description: >
+        This is a blocking operation. It will not return until the Requestor
+        has acknowledged receiving the Invoice or timeout has passed.
+      parameters:
+        - $ref: '#/components/parameters/invoiceId'
+        - $ref: '#/components/parameters/ackTimeout'
+      responses:
+        200:
+          $ref: '#/components/responses/OK'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+        504:
+          $ref: '#/components/responses/AckTimeout'
+
+  /provider/invoices/{invoiceId}/cancel:
+    post:
+      tags:
+        - provider
+      summary: Cancel Invoice.
+      operationId: cancelInvoice
+      description: >
+        This is a blocking operation. It will not return until the Requestor
+        has acknowledged cancelling the Invoice or timeout has passed.
+        The Requestor may refuse to cancel the Invoice if they have already
+        paid it.
+      parameters:
+        - $ref: '#/components/parameters/invoiceId'
+        - $ref: '#/components/parameters/ackTimeout'
+      responses:
+        200:
+          $ref: '#/components/responses/OK'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        409:
+          $ref: '#/components/responses/InvoiceCancelRefused'
+        500:
+          $ref: '#/components/responses/ServerError'
+        504:
+          $ref: '#/components/responses/AckTimeout'
+
+  /provider/invoiceEvents:
+    get:
+      tags:
+        - provider
+      summary: Get Invoice events.
+      operationId: getProviderInvoiceEvents
+      description: >
+        Listen for Invoice-related events using long-polling. If there are
+        any events the method will return them immediately. If there are none
+        the method will wait until one appears or timeout passes.
+        `laterThan` parameter can be used in order to get just the 'new' events.
+        Setting the parameter value to the timestamp of the last processed event
+        ensures that no events will go unnoticed.
+
+      parameters:
+        - $ref: '#/components/parameters/eventTimeout'
+        - $ref: '#/components/parameters/laterThan'
+      responses:
+        200:
+          $ref: '#/components/responses/InvoiceEventList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /provider/payments:
+    get:
+      tags:
+        - provider
+      summary: Get incoming Payments.
+      operationId: getIncomingPayments
+      description: >
+        Payments can be treated as events and this method can be used to listen
+        for new payments by long-polling.  If there are any payments the method
+        will return them immediately. If there are none the method will wait
+        until one appears or timeout passes.
+        `laterThan` parameter can be used in order to get just the 'new'
+        payments. Setting the parameter value to the timestamp of the last
+        processed payment ensures that no payments will go unnoticed.
+      parameters:
+        - $ref: '#/components/parameters/eventTimeout'
+        - $ref: '#/components/parameters/laterThan'
+      responses:
+        200:
+          $ref: '#/components/responses/PaymentList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /provider/payments/{paymentId}:
+    get:
+      tags:
+        - provider
+      summary: Get incoming Payment.
+      operationId: getIncomingPayment
+      parameters:
+        - $ref: '#/components/parameters/paymentId'
+      responses:
+        200:
+          $ref: '#/components/responses/Payment'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/debitNotes:
+    get:
+      tags:
+        - requestor
+      summary: Get Debit Notes received by this Requestor.
+      operationId: getReceivedDebitNotes
+      responses:
+        200:
+          $ref: '#/components/responses/DebitNoteList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/debitNotes/{debitNodeId}:
+    get:
+      tags:
+        - requestor
+      summary: Get Debit Note.
+      operationId: getReceivedDebitNote
+      parameters:
+        - $ref: '#/components/parameters/debitNodeId'
+      responses:
+        200:
+          $ref: '#/components/responses/DebitNote'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/debitNotes/{debitNodeId}/payments:
+    get:
+      tags:
+        - requestor
+      summary: Get Payments for Debit Note.
+      operationId: getPaymentsForReceivedDebitNote
+      parameters:
+        - $ref: '#/components/parameters/debitNodeId'
+      responses:
+        200:
+          $ref: '#/components/responses/PaymentList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/debitNotes/{debitNodeId}/accept:
+    post:
+      tags:
+        - requestor
+      summary: Accept received Debit Note.
+      operationId: acceptDebitNote
+      description: >
+        Send Debit Note Accepted message to Debit Note Issuer. Trigger payment
+        orchestration for this Debit Note (using allocated lot identified by
+        AllocationId if any).
+
+
+        This is a blocking operation. It will not return until the Requestor
+        has acknowledged accepting the Invoice or timeout has passed.
+
+
+        NOTE: An Accepted Debit Note cannot be Rejected later.
+      parameters:
+        - $ref: '#/components/parameters/debitNodeId'
+        - $ref: '#/components/parameters/ackTimeout'
+      requestBody:
+        $ref: '#/components/requestBodies/Acceptance'
+      responses:
+        200:
+          $ref: '#/components/responses/OK'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+        504:
+          $ref: '#/components/responses/AckTimeout'
+
+  /requestor/debitNotes/{debitNodeId}/reject:
+    post:
+      tags:
+        - requestor
+      summary: Reject received Debit Note.
+      operationId: rejectDebitNote
+      description: >
+        Send Debit Note Rejected message to Invoice Issuer. Notification of
+        rejection is signalling that Requestor does not accept the Debit Note
+        (for some reason).
+
+
+        This is a blocking operation. It will not return until the Requestor
+        has acknowledged rejecting the Invoice or timeout has passed.
+
+
+        NOTE: A Rejected Debit Note can be Accepted subsequently (e.g. as a
+        result of some arbitrage).
+
+      parameters:
+        - $ref: '#/components/parameters/debitNodeId'
+        - $ref: '#/components/parameters/ackTimeout'
+      requestBody:
+        $ref: '#/components/requestBodies/Rejection'
+      responses:
+        200:
+          $ref: '#/components/responses/OK'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+        504:
+          $ref: '#/components/responses/AckTimeout'
+
+  /requestor/debitNoteEvents:
+    get:
+      tags:
+        - requestor
+      summary: Get Debit Note events.
+      operationId: getRequestorDebitNoteEvents
+      description: >
+        Listen for Debit Note-related events using long-polling. If there are
+        any events the method will return them immediately. If there are none
+        the method will wait until one appears or timeout passes.
+        `laterThan` parameter can be used in order to get just the 'new' events.
+        Setting the parameter value to the timestamp of the last processed event
+        ensures that no events will go unnoticed.
+
+      parameters:
+        - $ref: '#/components/parameters/eventTimeout'
+        - $ref: '#/components/parameters/laterThan'
+      responses:
+        200:
+          $ref: '#/components/responses/DebitNoteEventList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/invoices:
+    get:
+      tags:
+        - requestor
+      summary: Get Invoices received by this Requestor.
+      operationId: getReceivedInvoices
+      responses:
+        200:
+          $ref: '#/components/responses/InvoiceList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/invoices/{invoiceId}:
+    get:
+      tags:
+        - requestor
+      summary: Get Invoice.
+      operationId: getReceivedInvoice
+      parameters:
+        - $ref: '#/components/parameters/invoiceId'
+      responses:
+        200:
+          $ref: '#/components/responses/Invoice'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/invoices/{invoiceId}/payments:
+    get:
+      tags:
+        - requestor
+      summary: Get Payments for received Invoice.
+      operationId: getPaymentsForReceivedInvoice
+      parameters:
+        - $ref: '#/components/parameters/invoiceId'
+      responses:
+        200:
+          $ref: '#/components/responses/PaymentList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/invoices/{invoiceId}/accept:
+    post:
+      tags:
+        - requestor
+      summary: Accept received Invoice.
+      operationId: acceptInvoice
+      description: >
+        Send Invoice Accepted message to Invoice Issuer. Trigger payment
+        orchestration for this Invoice (using allocated lot identified by
+        AllocationId if any).
+
+
+        This is a blocking operation. It will not return until the Requestor
+        has acknowledged rejecting the Invoice or timeout has passed.
+
+
+        NOTE: An Accepted Invoice cannot be Rejected later.
+      parameters:
+        - $ref: '#/components/parameters/invoiceId'
+        - $ref: '#/components/parameters/ackTimeout'
+      requestBody:
+        $ref: '#/components/requestBodies/Acceptance'
+      responses:
+        200:
+          $ref: '#/components/responses/OK'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+        504:
+          $ref: '#/components/responses/AckTimeout'
+
+  /requestor/invoices/{invoiceId}/reject:
+    post:
+      tags:
+        - requestor
+      summary: Reject received Invoice.
+      operationId: rejectInvoice
+      description: >
+        Send Invoice Rejected message to Invoice Issuer. Notification of
+        rejection is signalling that Requestor does not accept Invoice
+        (for some reason).
+
+
+        This is a blocking operation. It will not return until the Requestor
+        has acknowledged rejecting the Invoice or timeout has passed.
+
+
+        NOTE: A Rejected Invoice can be Accepted subsequently (e.g. as a result
+        of some arbitrage).
+
+      parameters:
+        - $ref: '#/components/parameters/invoiceId'
+        - $ref: '#/components/parameters/ackTimeout'
+      requestBody:
+        $ref: '#/components/requestBodies/Rejection'
+      responses:
+        200:
+          $ref: '#/components/responses/OK'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+        504:
+          $ref: '#/components/responses/AckTimeout'
+
+  /requestor/invoiceEvents:
+    get:
+      tags:
+        - requestor
+      summary: Get Invoice events.
+      operationId: getRequestorInvoiceEvents
+      description: >
+        Listen for Invoice-related events using long-polling. If there are
+        any events the method will return them immediately. If there are none
+        the method will wait until one appears or timeout passes.
+        `laterThan` parameter can be used in order to get just the 'new' events.
+        Setting the parameter value to the timestamp of the last processed event
+        ensures that no events will go unnoticed.
+
+      parameters:
+        - $ref: '#/components/parameters/eventTimeout'
+        - $ref: '#/components/parameters/laterThan'
+      responses:
+        200:
+          $ref: '#/components/responses/InvoiceEventList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/allocations:
+    post:
+      tags:
+        - requestor
+      summary: Create Allocation.
+      operationId: createAllocation
+      description: Allocate funds to make sure they are not spent elsewhere.
+      requestBody:
+        $ref: '#/components/requestBodies/Allocation'
+      responses:
+        201:
+          $ref: '#/components/responses/Allocation'
+        400:
+          $ref: '#/components/responses/BadRequest'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+    get:
+      tags:
+        - requestor
+      summary: Get Allocations.
+      operationId: getAllocations
+      responses:
+        200:
+          $ref: '#/components/responses/AllocationList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/allocations/{allocationId}:
+    get:
+      tags:
+        - requestor
+      summary: Get Allocation.
+      operationId: getAllocation
+      parameters:
+        - $ref: '#/components/parameters/allocationId'
+      responses:
+        200:
+          $ref: '#/components/responses/Allocation'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+    put:
+      tags:
+        - requestor
+      summary: Amend Allocation.
+      operationId: amendAllocation
+      parameters:
+        - $ref: '#/components/parameters/allocationId'
+      requestBody:
+          $ref: '#/components/requestBodies/Allocation'
+      responses:
+        200:
+          $ref: '#/components/responses/Allocation'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+    delete:
+      tags:
+        - requestor
+      summary: Release Allocation.
+      operationId: releaseAllocation
+      description: >
+        The Allocation of amount is released. Note that this operation releases
+        currently allocated amount (which may have been reduced by subsequent
+        Invoice Payments).
+
+
+        If the Allocation was connected with a Deposit the release amount from
+        Deposit shall be marked as pending to be paid back to Requestor - and
+        eventually will be paid back, unless a subsequent Allocation with
+        Deposit is made. The Payment Platform implementations may optimize
+        unnecessary fund transfers (i.e. will not pay back the Deposit if
+        released funds can be assigned to a new Allocation with Deposit).
+
+      parameters:
+        - $ref: '#/components/parameters/allocationId'
+      responses:
+        200:
+          $ref: '#/components/responses/OK'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/payments:
+    get:
+      tags:
+        - requestor
+      summary: Get outgoing Payments.
+      operationId: getOutgoingPayments
+      description: >
+        Payments can be treated as events and this method can be used to listen
+        for new payments by long-polling.  If there are any payments the method
+        will return them immediately. If there are none the method will wait
+        until one appears or timeout passes.
+        `laterThan` parameter can be used in order to get just the 'new'
+        payments. Setting the parameter value to the timestamp of the last
+        processed payment ensures that no payments will go unnoticed.
+      parameters:
+        - $ref: '#/components/parameters/eventTimeout'
+        - $ref: '#/components/parameters/laterThan'
+      responses:
+        200:
+          $ref: '#/components/responses/PaymentList'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+  /requestor/payments/{paymentId}:
+    get:
+      tags:
+        - requestor
+      summary: Get outgoing Payment.
+      operationId: getOutgoingPayment
+      parameters:
+        - $ref: '#/components/parameters/paymentId'
+      responses:
+        200:
+          $ref: '#/components/responses/Payment'
+        401:
+          $ref: '#/components/responses/Unauthorized'
+        404:
+          $ref: '#/components/responses/NotFound'
+        500:
+          $ref: '#/components/responses/ServerError'
+
+components:
+
+  securitySchemes:
+    app_key:
+      $ref: 'common.yaml#/components/securitySchemes/app_key'
+  
+  parameters:
+
+    subscriptionId:
+      name: subscriptionId
+      in: path
+      required: true
+      schema:
+        type: string
+
+    queryId:
+      name: queryId
+      in: path
+      required: true
+      schema:
+        type: string
+
+    proposalId:
+      name: proposalId
+      in: path
+      required: true
+      schema:
+        type: string
+
+    agreementId:
+      name: agreementId
+      in: path
+      required: true
+      schema:
+        type: string
+  
+    debitNodeId:
+      name: debitNodeId
+      required: true
+      in: path
+      schema:
+        type: string
+
+    invoiceId:
+      name: invoiceId
+      required: true
+      in: path
+      schema:
+        type: string
+
+    allocationId:
+      name: allocationId
+      required: true
+      in: path
+      schema:
+        type: string
+
+    paymentId:
+      name: paymentId
+      required: true
+      in: path
+      schema:
+        type: string
+
+    ackTimeout:
+      name: timeout
+      description: >
+        How many seconds server should wait for acknowledgement from the remote
+        party (0 means forever)
+      required: false
+      in: query
+      schema:
+        type: number
+        minimum: 0
+        default: 60
+
+    eventTimeout:
+      name: timeout
+      description: >
+        How many seconds server should wait for new events (0 means it should
+        return immediately if there are no events)
+      required: false
+      in: query
+      schema:
+        type: number
+        minimum: 0
+        default: 0
+
+    laterThan:
+      name: laterThan
+      description: Show only events later than specified timeout
+      in: query
+      required: false
+      schema:
+        type: string
+        format: date-time
+  
+  requestBodies:
+
+    Offer:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Offer'
+
+    Demand:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Demand'
+
+    Proposal:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Proposal'
+
+    AgreementProposal:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AgreementProposal'
+
+    PropertyQueryReply:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/PropertyQueryReply'
+
+    DebitNote:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/DebitNote'
+
+    Invoice:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Invoice'
+
+    Allocation:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Allocation'
+
+    Acceptance:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Acceptance'
+
+    Rejection:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Rejection'
+
+  responses:
+
+    SubscriptionId:
+      description: Subscribed.
+      content:
+        application/json:
+          schema:
+            type: string
+            description: Subscription id
+
+    Proposal:
+      description: Proposal.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Proposal'
+
+    ProposalId:
+      description: Counter Proposal created.
+      content:
+        application/json:
+          schema:
+            type: string
+            description: Proposal Id
+
+    BadRequest:
+      description: Bad request.
+      content:
+        application/json:
+          schema:
+            $ref: 'common.yaml#/schemas/ErrorMessage'
+
+    Unauthorized:
+      description: Authorization information is missing or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: 'common.yaml#/schemas/ErrorMessage'
+
+    NotFound:
+      description: The specified resource was not found.
+      content:
+        application/json:
+          schema:
+            $ref: 'common.yaml#/schemas/ErrorMessage'
+
+    UnexpectedError:
+      description: Unexpected error.
+      content:
+        application/json:
+          schema:
+            $ref: 'common.yaml#/schemas/ErrorMessage'
+
+    OK:
+      description: OK
+
+    ServerError:
+      description: Server error
+      content:
+        application/json:
+          schema:
+            $ref: 'common.yaml#/schemas/ErrorMessage'
+
+    AckTimeout:
+      description: The Requestor has not responded to the request within timeout.
+      content:
+        application/json:
+          schema:
+            $ref: 'common.yaml#/schemas/ErrorMessage'
+
+    DebitNoteCancelRefused:
+      description: The Requestor has refused to cancel the Debit Note.
+      content:
+        application/json:
+          schema:
+            $ref: 'common.yaml#/schemas/ErrorMessage'
+
+    DebitNote:
+      description: OK
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/DebitNote'
+
+    DebitNoteList:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/DebitNote'
+
+    InvoiceCancelRefused:
+      description: The Requestor has refused to cancel the Invoice.
+      content:
+        application/json:
+          schema:
+            $ref: 'common.yaml#/schemas/ErrorMessage'
+
+    Invoice:
+      description: OK
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Invoice'
+
+    InvoiceList:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Invoice'
+
+    Allocation:
+      description: OK
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Allocation'
+
+    AllocationList:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Allocation'
+
+    Payment:
+      description: OK
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Allocation'
+
+    PaymentList:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/Payment'
+
+    DebitNoteEventList:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/DebitNoteEvent'
+
+    InvoiceEventList:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: '#/components/schemas/InvoiceEvent'
+
+  schemas:
+
+    DemandOfferBase:
+      type: object
+      required:
+        - properties
+        - constraints
+      properties:
+        properties:
+          type: object
+        constraints:
+          type: string
+
+    Demand:
+      allOf:
+        - $ref: '#/components/schemas/DemandOfferBase'
+        - type: object
+          properties:
+            demandId:
+              type: string
+              readOnly: true
+            requestorId:
+              type: string
+              readOnly: true
+
+    Offer:
+      allOf:
+        - $ref: '#/components/schemas/DemandOfferBase'
+        - type: object
+          properties:
+            offerId:
+              type: string
+              readOnly: true
+            providerId:
+              type: string
+              readOnly: true
+
+    # TODO: add specified OfferProposal and DemandProposal to disabiguate API
+    Proposal:
+      allOf:
+        - $ref: '#/components/schemas/DemandOfferBase'
+        - type: object
+          properties:
+            proposalId:
+              type: string
+              readOnly: true
+            issuerId:
+              type: string
+              readOnly: true
+            state:
+              type: string
+              readOnly: true
+              enum: [Initial, Draft, Rejected, Accepted, Expired]
+              description: >
+                * `Initial` - proposal arrived from the market as response
+                to subscription
+
+                * `Draft` - bespoke counter-proposal issued by one party
+                directly to other party (negotiation phase)
+
+                * `Rejected` by other party
+
+                * `Accepted` - promoted into the Agreement draft
+
+                * `Expired` - not accepted nor rejected before validity period
+            prevProposalId:
+              type: string
+              description: >
+                id of the proposal from other side which this proposal responds to
+
+    AgreementProposal:
+      type: object
+      required:
+        - proposalId
+        - validTo
+      properties:
+        proposalId:
+          type: string
+          description: id of the proposal to be promoted to the Agreement
+        validTo:
+          type: string
+          format: date-time
+          description: >
+            End of validity period. Agreement needs to be accepted, rejected or
+            cancellled before this date; otherwise will expire
+
+    Agreement:
+      type: object
+      required:
+        - agreementId
+        - demand
+        - offer
+        - validTo
+        - state
+      properties:
+        agreementId:
+          type: string
+        demand:
+          $ref: '#/components/schemas/Demand'
+        offer:
+          $ref: '#/components/schemas/Offer'
+        validTo:
+          type: string
+          format: date-time
+          description: >
+            End of validity period. Agreement needs to be accepted, rejected or
+            cancellled before this date; otherwise will expire
+        approvedDate:
+          type: string
+          format: date-time
+          description: date of the Agreement approval
+        state:
+          type: string
+          enum: [Proposal, Pending, Cancelled, Rejected, Approved, Expired, Terminated]
+          description: >
+            * `Proposal` - newly created by a Requestor (based on Proposal)
+
+            * `Pending` - confirmed by a Requestor and send to Provider for approval
+
+            * `Cancelled` by a Requestor
+
+            * `Rejected` by a Provider
+
+            * `Approved` by both sides
+
+            * `Expired` - not accepted, rejected nor cancelled within validity period
+
+            * `Terminated` - finished after approval.
+        proposedSignature:
+          type: string
+        approvedSignature:
+          type: string
+        committedSignature:
+          type: string
+
+    PropertyQuery:
+      type: object
+      properties:
+        issuerProperties:
+          type: object
+        queryId:
+          type: string
+        queriedProperties:
+          uniqueItems: false
+          type: array
+          items:
+            type: string
+
+    PropertyQueryReply:
+      type: object
+
+    Event:
+      type: object
+      required:
+        - eventType
+        - eventDate
+      discriminator:
+        propertyName: eventType
+      properties:
+        eventType:
+          type: string
+        eventDate:
+          type: string
+          format: date-time
+
+    ProposalEvent:
+      allOf:
+        - $ref: '#/components/schemas/Event'
+        - type: object
+          properties:
+            proposal:
+              $ref: '#/components/schemas/Proposal'
+
+    AgreementEvent:
+      allOf:
+        - $ref: '#/components/schemas/Event'
+        - type: object
+          properties:
+            agreement:
+              $ref: '#/components/schemas/Agreement'
+
+    PropertyQueryEvent:
+      allOf:
+        - $ref: '#/components/schemas/Event'
+        - type: object
+          properties:
+            propertyQuery:
+              $ref: '#/components/schemas/PropertyQuery'
+
+    DebitNote:
+      description: >
+        A Debit Note is an artifact issued by the Provider to the Requestor,
+        in the context of a specific Agreement. It is a notification of Total
+        Amount Due incurred by Activities in this Agreement until the moment the
+        Debit Note is issued. This is expected to be used as trigger for payment
+        in upfront-payment or pay-as-you-go scenarios.
+
+
+        NOTE: Debit Notes flag the current Total Amount Due, which is
+        accumulated from the start of Agreement. Debit Notes are expected to
+        trigger payments, therefore payment amount for the newly received Debit
+        Note is expected to be determined by difference of Total Payments for
+        the Agreement vs Total Amount Due.
+      type: object
+      properties:
+        debitNoteId:
+          type: string
+          readOnly: true
+        issuerId:
+          type: string
+          readOnly: true
+        recipientId:
+          type: string
+          readOnly: true
+        payeeAddr:
+          type: string
+          readOnly: true
+        payerAddr:
+          type: string
+          readOnly: true
+        previousDebitNoteId:
+          type: string
+          readOnly: true
+        timestamp:
+          type: string
+          format: date-time
+          readOnly: true
+        agreementId:
+          type: string
+          readOnly: true
+        activityId:
+          type: string
+        totalAmountDue:
+          type: string
+        usageCounterVector:
+          type: object
+        paymentDueDate:
+          type: string
+          format: date-time
+        status:
+          $ref: '#/components/schemas/InvoiceStatus'
+
+      required:
+        - debitNoteId
+        - issuerId
+        - recipientId
+        - timestamp
+        - agreementId
+        - activityId
+        - totalAmountDue
+        - status
+
+    Invoice:
+      description: >
+        An Invoice is an artifact issued by the Provider to the Requestor, in
+        the context of a specific Agreement. It indicates the total Amount owed
+        by the Requestor in this Agreement. No further Debit Notes shall be
+        issued after the Invoice is issued. The issue of Invoice signals the
+        Termination of the Agreement (if it hasn't been terminated already).
+        No Activity execution is allowed after the Invoice is issued.
+
+
+        NOTE: An invoice can be issued even before any Activity is started in
+        the context of an Agreement (eg. in one off, 'fire-and-forget' payment
+        regime).
+      type: object
+      properties:
+        invoiceId:
+          type: string
+          readOnly: true
+        issuerId:
+          type: string
+          readOnly: true
+        recipientId:
+          type: string
+          readOnly: true
+        payeeAddr:
+          type: string
+          readOnly: true
+        payerAddr:
+          type: string
+          readOnly: true
+        lastDebitNoteId:
+          type: string
+          readOnly: true
+        timestamp:
+          type: string
+          format: date-time
+          readOnly: true
+        agreementId:
+          type: string
+        activityIds:
+          type: array
+          items:
+            type: string
+        amount:
+          type: string
+        paymentDueDate:
+          type: string
+          format: date-time
+        status:
+          $ref: '#/components/schemas/InvoiceStatus'
+
+      required:
+        - invoiceId
+        - issuerId
+        - recipientId
+        - timestamp
+        - agreementId
+        - amount
+        - paymentDueDate
+        - status
+
+    InvoiceStatus:
+      description: >
+        Accepted status indicates that the Requestor confirms the Amount/Total
+        Amount Due on the Invoice/Debit Note, respectively. The Payment API
+        Implementation is expected to proceed with the orchestration of the
+        payment. Internals of the payment processing (eg. payment processing
+        internal states) are specific to the selected Payment Platform, and must
+        be indicated as an attribute of the Accepted status. However, as they
+        are specific - they shall not be standardized by the Payment API.
+
+
+        A Rejected Invoice/Debit Note can subsequently be Accepted.
+
+
+        An Accepted Invoice/Debit Note cannot be subsequently Rejected.
+
+
+        There is a difference between Paid and Settled - depending on a Payment
+        Platform. Paid indicates that the Requestor has ordered Payments of
+        Total Amount Due as indicated by received/accepted Debit Notes/Invoice.
+        Settled indicates that the Provider has reliably received the Payments.
+      type: string
+      enum:
+        - ISSUED
+        - RECEIVED
+        - ACCEPTED
+        - REJECTED
+        - FAILED
+        - SETTLED
+        - CANCELLED
+      readOnly: true
+
+    Acceptance:
+      description: Message sent when Requestor accepts a Debit Note or Invoice.
+      type: object
+      properties:
+        totalAmountAccepted:
+          type: string
+        allocationId:
+          type: string
+      required:
+        - totalAmountAccepted
+        - allocationId
+
+    Rejection:
+      description: Message sent when Requestor rejects a Debit Note or Invoice.
+      type: object
+      properties:
+        rejectionReason:
+          $ref: '#/components/schemas/RejectionReason'
+        totalAmountAccepted:
+          type: string
+        message:
+          type: string
+      required:
+        - rejectionReason
+        - totalAmountAccepted
+
+    RejectionReason:
+      description: Possible reasons to reject a Debit Note or Invoice.
+      type: string
+      enum:
+        - UNSOLICITED_SERVICE
+        - BAD_SERVICE
+        - INCORRECT_AMOUNT
+
+    Allocation:
+      type: object
+      description: ADD DESCRIPTION
+      properties:
+        allocationId:
+          type: string
+          readOnly: true
+        totalAmount:
+          type: string
+        spentAmount:
+          type: string
+          readOnly: true
+        remainingAmount:
+          type: string
+          readOnly: true
+        timeout:
+          type: string
+          format: date-time
+        makeDeposit:
+          type: boolean
+      required:
+        - allocationId
+        - totalAmount
+        - spentAmount
+        - remainingAmount
+        - makeDeposit
+
+    Payment:
+      type: object
+      description: ADD DESCRIPTION
+      readOnly: true
+      properties:
+        paymentId:
+          type: string
+        payerId:
+          type: string
+        payeeId:
+          type: string
+        payerAddr:
+          type: string
+        payeeAddr:
+          type: string
+        amount:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        allocationId:
+          type: string
+        agreementPayments:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgreementPayment'
+        activityPayments:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivityPayment'
+        details:
+          type: string
+          format: byte
+      required:
+        - paymentId
+        - payerId
+        - payeeId
+        - amount
+        - timestamp
+        - agreementPayments
+        - activityPayments
+        - details
+
+    AgreementPayment:
+      description: >
+        Share of a Payment assigned to an Agreement, but not to any particular
+        Activity within that Agreement.
+      type: object
+      readOnly: true
+      properties:
+        agreementId:
+          type: string
+        amount:
+          type: string
+      required:
+        - agreementId
+        - amount
+
+    ActivityPayment:
+      description: >
+        Share of a Payment assigned to a particular Activity.
+      type: object
+      readOnly: true
+      properties:
+        activityId:
+          type: string
+        amount:
+          type: string
+      required:
+        - activityId
+        - amount
+
+    DebitNoteEvent:
+      type: object
+      readOnly: true
+      properties:
+        debitNoteId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: object
+        eventType:
+          $ref: '#/components/schemas/EventType'
+      required:
+        - debitNoteId
+        - timestamp
+        - eventType
+
+    InvoiceEvent:
+      type: object
+      readOnly: true
+      properties:
+        invoiceId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: object
+        eventType:
+          $ref: '#/components/schemas/EventType'
+      required:
+        - invoiceId
+        - timestamp
+        - eventType
+
+    EventType:
+      description: Types of Debit Note/Invoice events
+      type: string
+      enum:
+        - RECEIVED
+        - ACCEPTED
+        - REJECTED
+        - CANCELLED
+
+    ExeScriptRequest:
+      required:
+        - text
+      type: object
+      properties:
+        text:
+          type: string
+
+    ExeScriptCommandResult:
+      required:
+        - index
+        - result
+      type: object
+      properties:
+        index:
+          type: integer
+          format: int32
+          minimum: 0
+        result:
+          type: string
+          enum:
+            - Ok
+            - Error
+        message:
+          type: string
+        isBatchFinished:
+          type: boolean
+
+    ExeScriptCommandState:
+      required:
+        - command
+      type: object
+      properties:
+        command:
+          type: string
+        progress:
+          type: string
+        params:
+          type: array
+          items:
+            type: string
+
+    ActivityUsage:
+      type: object
+      properties:
+        currentUsage:
+          type: array
+          description: Current usage vector
+          items:
+            type: number
+            format: double
+        timestamp:
+          type: integer
+          description: Usage update timestamp (UTC)
+
+    ActivityState:
+      required:
+        - state
+      type: object
+      properties:
+        state:
+          type: array
+          description: State pair tuple (CurrentState, NextState). NextState is equal to null
+            if there is no pending transition between states.
+          items:
+            type: string
+            nullable: true
+            enum:
+              - New
+              - Initialized
+              - Deployed
+              - Ready
+              - Unresponsive
+              - Terminated
+        reason:
+          type: string
+          description: Reason for Activity termination (specified when Activity in
+            Terminated state).
+        errorMessage:
+          type: string
+          description: If error caused state change - error message shall be provided.
+
+    ProviderEvent:
+      required:
+        - eventType
+        - activityId
+      type: object
+      properties:
+        eventType:
+          type: string
+        activityId:
+          type: string
+      discriminator:
+        propertyName: eventType
+
+    CreateActivity:
+      required:
+        - agreementId
+      allOf:
+        - $ref: '#/components/schemas/ProviderEvent'
+        - type: object
+          properties:
+            agreementId:
+              type: string
+
+    DestroyActivity:
+      required:
+        - agreementId
+      allOf:
+        - $ref: '#/components/schemas/ProviderEvent'
+        - type: object
+          properties:
+            agreementId:
+              type: string
+
+    GetActivityState:
+      allOf:
+        - $ref: '#/components/schemas/ProviderEvent'
+
+    GetActivityUsage:
+      allOf:
+        - $ref: '#/components/schemas/ProviderEvent'
